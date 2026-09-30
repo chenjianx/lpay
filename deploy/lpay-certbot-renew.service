@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew lpay public IP certificate
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/lpay/deploy/renew-cert.sh

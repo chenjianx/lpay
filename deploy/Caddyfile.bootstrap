@@ -1,0 +1,7 @@
+http://2.25.72.73 {
+    handle /.well-known/acme-challenge/* {
+        root * /srv/acme
+        file_server
+    }
+    respond "Certificate setup in progress" 503
+}

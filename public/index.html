@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f7f7f7">
+  <title>消息已读状态查询工具</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <button id="backButton" class="header-back" aria-label="返回">×</button>
+    <div><strong>消息已读状态查询工具</strong><span id="siteAddress"></span></div>
+    <button id="moreButton" class="header-more" aria-label="更多">···</button>
+  </header>
+  <main id="app"></main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
