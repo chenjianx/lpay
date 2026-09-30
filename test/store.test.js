@@ -14,6 +14,14 @@ test('orders use server prices and paid metrics count once', () => {
   store.close();
 });
 
+test('new merchant order numbers fit ZPAY redirect payment requirements', () => {
+  const store = createStore(':memory:');
+  try {
+    const order = store.createOrder('month', 'visitor-1');
+    assert.match(order.orderNo, /^\d{1,32}$/);
+  } finally { store.close(); }
+});
+
 test('analytics distinguishes page views, unique visitors and clicks', () => {
   const store = createStore(':memory:');
   store.recordEvent('visitor-1', 'page_view', '/');

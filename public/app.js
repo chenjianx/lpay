@@ -13,6 +13,21 @@ async function request(url, options = {}) {
 }
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(showToast.timer); showToast.timer = setTimeout(() => toast.classList.remove('show'), 3000); }
 function track(type, target) { request('/api/events', { method: 'POST', body: JSON.stringify({ type, target }) }).catch(() => {}); }
+async function startPayment(orderNo) {
+  const result = await request(`/api/orders/${encodeURIComponent(orderNo)}/pay`, { method:'POST' });
+  if (result.redirectUrl) { location.href = result.redirectUrl; return; }
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = result.action;
+  form.hidden = true;
+  for (const [name, value] of Object.entries(result.fields)) {
+    const input = document.createElement('input');
+    input.type = 'hidden'; input.name = name; input.value = value;
+    form.append(input);
+  }
+  document.body.append(form);
+  form.submit();
+}
 function button(id, label, className = 'primary') { return `<button id="${id}" class="${className}">${label}</button>`; }
 function renderLoading() {
   app.innerHTML = `<section class="loading-screen" aria-label="正在加载页面"><div class="loading-content"><div class="loading-icon" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M6 21 24 7l18 14" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 22v18h18V25l-3-3-8 7-7-7Z" fill="currentColor"/><rect x="28" y="23" width="14" height="21" rx="3" fill="currentColor"/><path d="M33 29h4m-4 6h4" stroke="white" stroke-width="2.5" stroke-linecap="round"/></svg></div><h1>正在打开消息已读工具</h1><p>正在载入页面资源</p><div class="loading-bar" role="progressbar" aria-label="页面加载进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="8"><span id="loadProgress"></span></div><p class="loading-status">已读工具初始化中...</p></div><span class="loading-version">已读 · 版本 1.0.0</span></section>`;
@@ -27,12 +42,12 @@ function modal(title, content) {
   overlay.querySelector('.sheet-head button').onclick = close;
   overlay.querySelector('#sheetAgree').onclick = close;
 }
-const terms = `<p>1. 本工具为第三方独立开发，与微信官方无任何关联。</p><p>2. 当前版本尚未开通微信私人聊天消息已读状态查询，请在购买前确认实际服务内容。</p><p>3. 创建订单后，页面会显示订单编号和金额；实际付款以微信官方收银台的信息为准。</p><p>4. 如需申请退款，请通过在线客服提供订单编号，由客服按订单情况处理。</p><p>5. 请在合法合规场景下使用，不得用于骚扰、诈骗等违法行为。</p><p>6. 如有疑问，请通过页面内的在线聊天联系客服。</p>`;
+const terms = `<p>1. 本工具为第三方独立开发，与微信官方无任何关联。</p><p>2. 创建订单后，页面会显示订单编号和金额；实际付款以支付收银台的信息为准。</p><p>3. 付款成功后，请通过在线客服提交订单编号，服务由人工交付，不会自动开通。</p><p>4. 如需申请退款，请通过在线客服提供订单编号，由客服按订单情况处理。</p><p>5. 请在合法合规场景下使用，不得用于骚扰、诈骗等违法行为。</p><p>6. 如有疑问，请通过页面内的在线聊天联系客服。</p>`;
 function planMarkup(id, title, tag, desc, extra, price, featured = false) {
   return `<button class="plan ${featured ? 'featured' : ''} ${selectedPlan === id ? 'selected' : ''}" data-plan="${id}" aria-pressed="${selectedPlan === id}">${featured ? '<span class="recommend">♛ 推荐 · 尊享首选</span>' : ''}<span class="radio">${selectedPlan === id ? '✓' : ''}</span><span class="plan-body"><span class="plan-title"><strong>${title}</strong><span class="pill ${featured ? 'red' : ''}">${tag}</span></span><span class="plan-desc">${desc}</span>${extra ? `<span class="plan-extra">${extra}</span>` : ''}</span><span class="plan-price"><small>¥</small>${price}</span>${featured ? '<span class="benefits"><span><i>✓</i> 永久免费更新</span><span><i>✓</i> 24小时在线售后</span><span><i>✓</i> 最新功能体验</span></span>' : ''}</button>`;
 }
 function renderHome() {
-  app.innerHTML = `<div class="screen"><div class="notice"><span class="info-icon">i</span><div><b>须知：</b>通过卡片消息用户点击获取已读状态</div></div><div class="section-heading"><h1>选择服务套餐</h1><span>请选择适合的套餐</span></div><div id="plans"></div><button id="refund" class="refund">若无法查看可联系客服申请退款</button><div class="fineprint"><p>· 此工具为第三方独立工具，与微信官方无关联。</p><p>· 购买前请详细阅读《购买须知》，了解服务内容及退款规则。</p></div></div><div class="fixed-bottom"><div class="bottom-inner"><label class="agree"><input id="agree" type="checkbox"><span>点击支付即同意</span><button id="agreement">《用户服务协议》</button><button id="purchaseNotice">《购买须知》</button></label><div class="actions">${button('buy','立即开通')}${button('partTime','兼职赚佣金','orange')}</div><div class="version">已读 · 版本 1.0.0</div></div></div>`;
+  app.innerHTML = `<div class="screen"><div class="notice"><span class="info-icon">i</span><div><b>须知：</b>通过卡片消息用户点击获取已读状态；付款后凭订单号联系客服，由人工交付</div></div><div class="section-heading"><h1>选择服务套餐</h1><span>请选择适合的套餐</span></div><div id="plans"></div><button id="refund" class="refund">若无法查看可联系客服申请退款</button><div class="fineprint"><p>· 此工具为第三方独立工具，与微信官方无关联。</p><p>· 购买前请详细阅读《购买须知》，了解服务内容及退款规则。</p></div></div><div class="fixed-bottom"><div class="bottom-inner"><label class="agree"><input id="agree" type="checkbox"><span>点击支付即同意</span><button id="agreement">《用户服务协议》</button><button id="purchaseNotice">《购买须知》</button></label><div class="actions">${button('buy','立即下单')}${button('partTime','兼职赚佣金','orange')}</div><div class="version">已读 · 版本 1.0.0</div></div></div>`;
   const plans = document.querySelector('#plans');
   const fillPlans = () => {
     plans.innerHTML = planMarkup('month','一个月','体验套餐','不用再猜！发完消息立刻知道对方看没看','','9.99') + planMarkup('year','一年','性价比高','长期使用更划算！全年不用再等消息回执','省 ¥45.95 | 折合月均成本更低','13.99') + planMarkup('forever','永久','热销套餐','永久使用！再也不用纠结“为啥不回我”','省 ¥339.65 | 已有 999+ 用户购买','19.99',true);
@@ -46,7 +61,11 @@ function renderHome() {
   document.querySelector('#buy').onclick = async () => {
     track('click','buy');
     if (!document.querySelector('#agree').checked) return showToast('请先阅读并同意购买须知');
-    try { const order = await request('/api/orders', { method: 'POST', body: JSON.stringify({ planId: selectedPlan }) }); location.href = `/order?orderNo=${encodeURIComponent(order.orderNo)}`; }
+    try {
+      const order = await request('/api/orders', { method: 'POST', body: JSON.stringify({ planId: selectedPlan }) });
+      if (!session.checkoutEnabled) { location.href = `/order?orderNo=${encodeURIComponent(order.orderNo)}`; return; }
+      await startPayment(order.orderNo);
+    }
     catch (error) { showToast(error.message); }
   };
 }
@@ -65,7 +84,7 @@ async function renderOrder() {
   app.innerHTML = '<div class="screen"><p class="muted">正在加载订单…</p></div>';
   try {
     const order = await request(`/api/orders/${encodeURIComponent(orderNo)}`);
-    app.innerHTML = `<div class="screen"><div class="order-band"></div><div class="order-card"><h1>订单确认</h1><div class="order-row"><span>订单名称：</span><strong id="orderName"></strong></div><div class="order-row"><span>订单金额：</span><strong class="amount" id="orderAmount"></strong></div><div class="order-row"><span>订单编号：</span><strong id="orderNo"></strong></div><div class="order-row"><span>创建时间：</span><strong id="createdAt"></strong></div>${button('pay',session.checkoutEnabled ? '支付' : '支付暂未开通')}<p class="order-status" id="orderStatus" hidden></p><p class="muted">付款将跳转至微信官方收银台。此页面不收集支付密码。</p></div></div>`;
+    app.innerHTML = `<div class="screen"><div class="order-band"></div><div class="order-card"><h1>订单确认</h1><div class="order-row"><span>订单名称：</span><strong id="orderName"></strong></div><div class="order-row"><span>订单金额：</span><strong class="amount" id="orderAmount"></strong></div><div class="order-row"><span>订单编号：</span><strong id="orderNo"></strong></div><div class="order-row"><span>创建时间：</span><strong id="createdAt"></strong></div>${button('pay',session.checkoutEnabled ? '支付' : '支付暂未开通')}<p class="order-status" id="orderStatus" hidden></p><p class="muted">付款将跳转至 ZPAY 收银台，请核对金额。付款后请<a href="/chat">联系客服并提供订单号</a>，服务由人工交付。此页面不收集支付密码。</p></div></div>`;
     document.querySelector('#orderName').textContent = `已读工具-${order.planName}版`;
     document.querySelector('#orderAmount').textContent = `¥${(order.amountFen / 100).toFixed(2)}`;
     document.querySelector('#orderNo').textContent = order.orderNo;
@@ -74,22 +93,10 @@ async function renderOrder() {
     document.querySelector('#pay').onclick = async () => {
       track('click','pay');
       if (!session.checkoutEnabled) return showToast('当前暂未开放支付');
-      if (!/MicroMessenger/i.test(navigator.userAgent)) return showToast('请在微信内打开此页面支付');
-      try {
-        const result = await request(`/api/orders/${encodeURIComponent(orderNo)}/pay`, { method:'POST' });
-        if (result.oauthUrl) { location.href = result.oauthUrl; return; }
-        const invoke = () => window.WeixinJSBridge.invoke('getBrandWCPayRequest', result.payment, async () => { await refreshStatus(orderNo); });
-        if (window.WeixinJSBridge) invoke(); else document.addEventListener('WeixinJSBridgeReady', invoke, { once:true });
-      } catch (error) { showToast(error.message); }
+      try { await startPayment(orderNo); } catch (error) { showToast(error.message); }
     };
-    if (new URLSearchParams(location.search).get('pay') === '1') document.querySelector('#pay').click();
   } catch (error) { app.innerHTML = `<div class="screen"><p class="muted">订单无法打开：${error.message}</p><a href="/">返回首页</a></div>`; }
 }
-async function refreshStatus(orderNo) {
-  try { const order = await request(`/api/orders/${encodeURIComponent(orderNo)}`); const status = document.querySelector('#orderStatus'); status.hidden = false; status.textContent = order.status === 'PAID' ? `已支付 · ${displayTime(order.paidAt)}` : '待支付，请稍后刷新查看'; if (order.status === 'PAID') { document.querySelector('#pay').disabled = true; document.querySelector('#pay').textContent = '已支付'; showToast('支付成功'); } }
-  catch (error) { showToast(error.message); }
-}
-
 function messageBubble(message) {
   const bubble = document.createElement('div'); bubble.className = `bubble ${message.sender === 'visitor' ? 'mine' : ''}`;
   const content = document.createElement('div'); content.textContent = message.body; bubble.append(content);

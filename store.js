@@ -25,7 +25,7 @@ export function createStore(path = 'data/lpay.db') {
     createOrder(planId, visitorId) {
       const plan = PLANS[planId];
       if (!plan || !visitorId) throw new Error('Invalid plan');
-      const orderNo = `RP${Date.now()}${randomBytes(6).toString('hex').toUpperCase()}`;
+      const orderNo = `${Date.now()}${randomBytes(6).readUIntBE(0, 6).toString().padStart(15, '0')}`;
       db.prepare('INSERT INTO orders(order_no,visitor_id,plan_id,amount_fen,status,created_at) VALUES(?,?,?,?,?,?)').run(orderNo, visitorId, planId, plan.amountFen, 'PENDING', now());
       return this.order(orderNo);
     },

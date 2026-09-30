@@ -3,11 +3,12 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { isIP } from 'node:net';
 import { createStore } from './store.js';
-import { createPrepay, decryptNotification, exchangeOAuthCode, queryPayment, verifyWechatSignature, wechatConfig } from './wechat.js';
+import { createZpayCheckout, createZpayWechatCheckout, queryZpay, verifyZpay, zpayConfig } from './zpay.js';
 
 const root = dirname(fileURLToPath(import.meta.url));
-const staticFiles = { '/': 'index.html', '/order': 'index.html', '/part-time': 'index.html', '/chat': 'index.html', '/admin': 'admin.html', '/app.js': 'app.js', '/admin.js': 'admin.js', '/style.css': 'style.css', '/admin.css': 'admin.css' };
+const staticFiles = { '/': 'index.html', '/order': 'index.html', '/part-time': 'index.html', '/chat': 'index.html', '/admin': 'admin.html', '/app.js': 'app.js', '/admin.js': 'admin.js', '/style.css': 'style.css', '/admin.css': 'admin.css', '/7d5cd45dcd51f003b1f8120b10a805e2.txt': '7d5cd45dcd51f003b1f8120b10a805e2.txt' };
 const json = (res, status, data, headers = {}) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers }); res.end(JSON.stringify(data)); };
 const redirect = (res, location, headers = {}) => { res.writeHead(302, { Location: location, ...headers }); res.end(); };
 const getCookies = req => Object.fromEntries((req.headers.cookie || '').split(';').map(x => x.trim().split('=').map(decodeURIComponent)).filter(x => x.length === 2));
@@ -19,10 +20,21 @@ const bodyText = async req => {
   return value;
 };
 const bodyJson = async req => JSON.parse(await bodyText(req));
+const moneyFen = value => {
+  const match = /^(0|[1-9]\d*)(?:\.(\d{1,2}))?$/.exec(value || '');
+  if (!match) return null;
+  const amount = Number(match[1]) * 100 + Number((match[2] || '').padEnd(2, '0'));
+  return Number.isSafeInteger(amount) ? amount : null;
+};
+const clientIp = req => {
+  const peer = (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+  if (peer !== '127.0.0.1' && peer !== '::1') return peer;
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',').at(-1).trim();
+  return isIP(forwarded) ? forwarded : peer;
+};
 
-export function createAppServer({ store, adminPassword = process.env.ADMIN_PASSWORD, checkoutEnabled = process.env.CHECKOUT_ENABLED === '1', secureCookies = process.env.SECURE_COOKIES === '1' }) {
+export function createAppServer({ store, adminPassword = process.env.ADMIN_PASSWORD, checkoutEnabled = process.env.CHECKOUT_ENABLED === '1', secureCookies = process.env.SECURE_COOKIES === '1', zpay }) {
   const sessions = new Map();
-  const oauthStates = new Map();
   const failedLogins = new Map();
   const cookieSecure = secureCookies ? '; Secure' : '';
   return http.createServer(async (req, res) => {
@@ -35,7 +47,7 @@ export function createAppServer({ store, adminPassword = process.env.ADMIN_PASSW
     const ownOrder = orderNo => { const order = store.order(orderNo); if (!order) throw Object.assign(new Error('Order not found'), { status: 404 }); if (order.visitorId !== visitorId) throw Object.assign(new Error('Forbidden'), { status: 403 }); return order; };
     const requireAdmin = () => { if (!admin) throw Object.assign(new Error('Login required'), { status: 401 }); };
     try {
-      if (req.method === 'POST' && path.startsWith('/api/') && path !== '/api/wechat/notify' && req.headers.origin) {
+      if (req.method === 'POST' && path.startsWith('/api/') && req.headers.origin) {
         const origin = new URL(req.headers.origin);
         if (origin.host !== req.headers.host) throw Object.assign(new Error('Invalid origin'), { status: 403 });
       }
@@ -52,8 +64,14 @@ export function createAppServer({ store, adminPassword = process.env.ADMIN_PASSW
       const orderMatch = path.match(/^\/api\/orders\/([^/]+)$/);
       if (req.method === 'GET' && orderMatch) {
         let order = ownOrder(orderMatch[1]);
-        if (checkoutEnabled && order.status === 'PENDING' && order.openid) {
-          try { const result = await queryPayment(wechatConfig(), order.orderNo); if (result.trade_state === 'SUCCESS' && result.amount?.total === order.amountFen) order = store.markPaid(order.orderNo, result.amount.total, result.transaction_id, result.success_time); } catch (error) { console.error('Order query:', error.message); }
+        if (order.status === 'PENDING' && /^\d{1,32}$/.test(order.orderNo) && (zpay || (process.env.ZPAY_PID && process.env.ZPAY_KEY))) {
+          try {
+            const config = zpay || zpayConfig();
+            const payment = await queryZpay(config, order.orderNo);
+            if (payment && String(payment.pid) === config.pid && payment.out_trade_no === order.orderNo && payment.type === 'wxpay' && moneyFen(payment.money) === order.amountFen && payment.trade_no) {
+              order = store.markPaid(order.orderNo, order.amountFen, payment.trade_no);
+            }
+          } catch { console.error('ZPAY order query failed'); }
         }
         return json(res, 200, order);
       }
@@ -62,37 +80,24 @@ export function createAppServer({ store, adminPassword = process.env.ADMIN_PASSW
         const order = ownOrder(payMatch[1]);
         if (!checkoutEnabled) return json(res, 503, { error: '当前暂未开放支付' });
         if (order.status !== 'PENDING') return json(res, 409, { error: '订单无法支付' });
-        const config = wechatConfig();
-        if (!order.openid) {
-          const state = token();
-          oauthStates.set(state, { orderNo: order.orderNo, visitorId, expires: Date.now() + 5 * 60_000 });
-          const callback = encodeURIComponent(`${config.baseUrl}/api/wechat/oauth/callback`);
-          return json(res, 200, { oauthUrl: `https://open.weixin.qq.com/connect/oauth2/authorize?appid=${encodeURIComponent(config.appid)}&redirect_uri=${callback}&response_type=code&scope=snsapi_base&state=${state}#wechat_redirect` });
+        if (/MicroMessenger/i.test(req.headers['user-agent'] || '')) return json(res, 200, await createZpayWechatCheckout(zpay || zpayConfig(), order, clientIp(req)));
+        return json(res, 200, createZpayCheckout(zpay || zpayConfig(), order));
+      }
+      if (req.method === 'GET' && path === '/api/zpay/notify') {
+        const fields = Object.fromEntries(url.searchParams);
+        if (url.searchParams.size !== Object.keys(fields).length || !verifyZpay(fields, (zpay || zpayConfig()).key)) return json(res, 401, { error: 'Invalid signature' });
+        if (fields.trade_status === 'TRADE_SUCCESS') {
+          const order = store.order(fields.out_trade_no);
+          const amount = moneyFen(fields.money);
+          if (!order || fields.pid !== (zpay || zpayConfig()).pid || fields.type !== 'wxpay' || amount !== order.amountFen || !fields.trade_no || (order.status === 'PAID' && order.transactionId !== fields.trade_no)) return json(res, 400, { error: 'Payment mismatch' });
+          store.markPaid(order.orderNo, amount, fields.trade_no);
         }
-        return json(res, 200, { payment: await createPrepay(config, order) });
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end('success');
       }
-      if (req.method === 'GET' && path === '/api/wechat/oauth/callback') {
-        const state = oauthStates.get(url.searchParams.get('state'));
-        oauthStates.delete(url.searchParams.get('state'));
-        if (!state || state.expires < Date.now() || state.visitorId !== visitorId || !url.searchParams.get('code')) return json(res, 400, { error: '授权状态已过期，请重新下单' });
-        const openid = await exchangeOAuthCode(wechatConfig(), url.searchParams.get('code'));
-        store.setOpenid(state.orderNo, openid);
-        return redirect(res, `/order?orderNo=${encodeURIComponent(state.orderNo)}&pay=1`);
-      }
-      if (req.method === 'POST' && path === '/api/wechat/notify') {
-        const raw = await bodyText(req);
-        const config = wechatConfig();
-        const timestamp = req.headers['wechatpay-timestamp'];
-        const signature = req.headers['wechatpay-signature'];
-        const serial = req.headers['wechatpay-serial'];
-        if (Math.abs(Date.now() / 1000 - Number(timestamp)) > 300 || (config.publicKeyId && serial !== config.publicKeyId) || !verifyWechatSignature({ timestamp, nonce: req.headers['wechatpay-nonce'], body: raw, signature, publicKey: config.publicKey })) return json(res, 401, { error: 'Invalid signature' });
-        const notification = JSON.parse(raw);
-        if (notification.event_type !== 'TRANSACTION.SUCCESS') return json(res, 200, { code: 'SUCCESS' });
-        const payment = decryptNotification(notification.resource, config.apiV3Key);
-        const order = store.order(payment.out_trade_no);
-        if (!order || payment.mchid !== config.mchid || payment.appid !== config.appid || payment.trade_state !== 'SUCCESS' || payment.amount?.total !== order.amountFen) return json(res, 400, { error: 'Payment mismatch' });
-        store.markPaid(order.orderNo, payment.amount.total, payment.transaction_id, payment.success_time);
-        return json(res, 200, { code: 'SUCCESS' });
+      if (req.method === 'GET' && path === '/api/zpay/return') {
+        const orderNo = url.searchParams.get('out_trade_no');
+        return redirect(res, orderNo ? `/order?orderNo=${encodeURIComponent(orderNo)}` : '/');
       }
       if (req.method === 'GET' && path === '/api/chat/messages') return json(res, 200, store.messages(visitorId, Number(url.searchParams.get('after') || 0)));
       if (req.method === 'POST' && path === '/api/chat/messages') return json(res, 201, store.addMessage(visitorId, 'visitor', (await bodyJson(req)).body));
@@ -119,7 +124,7 @@ export function createAppServer({ store, adminPassword = process.env.ADMIN_PASSW
       }
       if (req.method === 'GET' && staticFiles[path]) {
         const file = join(root, 'public', staticFiles[path]);
-        const contentType = file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html';
+        const contentType = file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : file.endsWith('.txt') ? 'text/plain' : 'text/html';
         res.writeHead(200, { 'Content-Type': `${contentType}; charset=utf-8` });
         return res.end(readFileSync(file));
       }
