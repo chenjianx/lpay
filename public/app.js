@@ -13,6 +13,15 @@ async function request(url, options = {}) {
 }
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(showToast.timer); showToast.timer = setTimeout(() => toast.classList.remove('show'), 3000); }
 function track(type, target) { request('/api/events', { method: 'POST', body: JSON.stringify({ type, target }) }).catch(() => {}); }
+function setPaymentLoading(button, loading) {
+  if (loading) button.dataset.paymentLabel = button.textContent;
+  else { button.textContent = button.dataset.paymentLabel; delete button.dataset.paymentLabel; }
+  button.disabled = loading;
+  if (loading) button.textContent = '正在跳转支付…';
+  button.classList[loading ? 'add' : 'remove']('payment-pending');
+  if (loading) button.setAttribute('aria-busy', 'true');
+  else button.removeAttribute('aria-busy');
+}
 async function startPayment(orderNo) {
   const result = await request(`/api/orders/${encodeURIComponent(orderNo)}/pay`, { method:'POST' });
   if (result.redirectUrl) { location.href = result.redirectUrl; return; }
@@ -58,15 +67,18 @@ function renderHome() {
   document.querySelector('#agreement').onclick = () => modal('用户服务协议', terms);
   document.querySelector('#purchaseNotice').onclick = () => modal('《购买须知》', terms);
   document.querySelector('#partTime').onclick = () => { track('click','part_time'); location.href = '/part-time'; };
-  document.querySelector('#buy').onclick = async () => {
+  const buyButton = document.querySelector('#buy');
+  buyButton.onclick = async () => {
+    if (buyButton.disabled) return;
     track('click','buy');
     if (!document.querySelector('#agree').checked) return showToast('请先阅读并同意购买须知');
+    setPaymentLoading(buyButton, true);
     try {
       const order = await request('/api/orders', { method: 'POST', body: JSON.stringify({ planId: selectedPlan }) });
       if (!session.checkoutEnabled) { location.href = `/order?orderNo=${encodeURIComponent(order.orderNo)}`; return; }
       await startPayment(order.orderNo);
     }
-    catch (error) { showToast(error.message); }
+    catch (error) { setPaymentLoading(buyButton, false); showToast(error.message); }
   };
 }
 
@@ -90,10 +102,13 @@ async function renderOrder() {
     document.querySelector('#orderNo').textContent = order.orderNo;
     document.querySelector('#createdAt').textContent = displayTime(order.createdAt);
     if (order.status === 'PAID') { document.querySelector('#orderStatus').hidden = false; document.querySelector('#orderStatus').textContent = `已支付 · ${displayTime(order.paidAt)}`; document.querySelector('#pay').disabled = true; document.querySelector('#pay').textContent = '已支付'; }
-    document.querySelector('#pay').onclick = async () => {
+    const payButton = document.querySelector('#pay');
+    payButton.onclick = async () => {
+      if (payButton.disabled) return;
       track('click','pay');
       if (!session.checkoutEnabled) return showToast('当前暂未开放支付');
-      try { await startPayment(orderNo); } catch (error) { showToast(error.message); }
+      setPaymentLoading(payButton, true);
+      try { await startPayment(orderNo); } catch (error) { setPaymentLoading(payButton, false); showToast(error.message); }
     };
   } catch (error) { app.innerHTML = `<div class="screen"><p class="muted">订单无法打开：${error.message}</p><a href="/">返回首页</a></div>`; }
 }
@@ -143,3 +158,10 @@ if (loadingDelay) {
 track('page_view', path);
 if (path === '/part-time') renderPartTime(); else if (path === '/order') renderOrder(); else if (path === '/chat') renderChat(); else renderHome();
 window.addEventListener('pagehide', () => clearInterval(chatTimer));
+window.addEventListener('pageshow', event => {
+  if (!event.persisted) return;
+  const buyButton = document.querySelector('#buy');
+  if (buyButton?.classList.contains('payment-pending')) setPaymentLoading(buyButton, false);
+  const payButton = document.querySelector('#pay');
+  if (payButton?.classList.contains('payment-pending')) setPaymentLoading(payButton, false);
+});

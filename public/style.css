@@ -56,4 +56,8 @@
 .loading-bar span{display:block;width:8%;height:100%;background:#00c65f;border-radius:inherit;transition:width 1.2s ease-out}
 .loading-content .loading-status{font-size:13px}
 .loading-version{position:absolute;bottom:calc(30px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);padding:6px 11px;border-radius:7px;background:#f0f1f2;color:#999;font-size:12px;white-space:nowrap}
+.primary.payment-pending:disabled{background:#00b75c;cursor:wait;opacity:.85}
+.primary.payment-pending::before{content:"";display:inline-block;width:14px;height:14px;margin-right:8px;vertical-align:-2px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:payment-spin .7s linear infinite}
+@keyframes payment-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.primary.payment-pending::before{animation:none}}
 @media(prefers-reduced-motion:reduce){.loading-bar span{transition:none}}
